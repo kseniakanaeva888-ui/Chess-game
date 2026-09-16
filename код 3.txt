@@ -1,0 +1,557 @@
+//---------------------------------------------------------------------------
+#include <vcl.h>
+#pragma hdrstop
+
+#include "Unit1.h"
+//---------------------------------------------------------------------------
+#pragma package(smart_init)
+#pragma resource "*.dfm"
+
+TForm1 *Form1;
+
+TPiece Board[8][8];
+PieceColor CurrentPlayer;
+int SelectedX = -1, SelectedY = -1;
+bool IsGameOver = false;
+bool PossibleMoves[8][8];
+int GameSeconds = 0;
+bool GameTimerRunning = true;
+bool CheckFlag = false;
+bool IsCheckmate = false;
+bool IsStalemate = false;
+AnsiString GameOverMessage = "";
+
+//---------------------------------------------------------------------------
+__fastcall TForm1::TForm1(TComponent* Owner) : TForm(Owner)
+{
+	SetupBoard();
+	DrawBoard();
+	UpdateStatusLabel();
+	UpdateGameTimerLabel();
+	Label1->Caption = "Нажмите 'Новая игра'";
+
+	Timer1->Interval = 1000;
+	Timer1->Enabled = false;
+	GameTimerRunning = false;
+}
+//---------------------------------------------------------------------------
+
+void TForm1::SetupBoard()
+{
+	for (int i = 0; i < 8; i++)
+		for (int j = 0; j < 8; j++)
+			Board[i][j] = TPiece(Empty, None);
+
+	for (int j = 0; j < 8; j++) {
+		Board[1][j] = TPiece(Black, Pawn);
+		Board[6][j] = TPiece(White, Pawn);
+	}
+
+	Board[0][0] = TPiece(Black, Rook);
+	Board[0][1] = TPiece(Black, Knight);
+    Board[0][2] = TPiece(Black, Bishop);
+	Board[0][3] = TPiece(Black, Queen);
+	Board[0][4] = TPiece(Black, King);
+	Board[0][5] = TPiece(Black, Bishop);
+	Board[0][6] = TPiece(Black, Knight);
+	Board[0][7] = TPiece(Black, Rook);
+
+	Board[7][0] = TPiece(White, Rook);
+    Board[7][1] = TPiece(White, Knight);
+	Board[7][2] = TPiece(White, Bishop);
+	Board[7][3] = TPiece(White, Queen);
+	Board[7][4] = TPiece(White, King);
+    Board[7][5] = TPiece(White, Bishop);
+	Board[7][6] = TPiece(White, Knight);
+	Board[7][7] = TPiece(White, Rook);
+}
+//---------------------------------------------------------------------------
+
+void TForm1::DrawBoard()
+{
+	int cellSize = Image1->Width / 8;
+	Graphics::TBitmap *buffer = new Graphics::TBitmap();
+	buffer->Width = Image1->Width;
+	buffer->Height = Image1->Height;
+
+	for (int row = 0; row < 8; row++) {
+		for (int col = 0; col < 8; col++) {
+			int x = col * cellSize;
+			int y = row * cellSize;
+
+			if ((row + col) % 2 == 0)
+				buffer->Canvas->Brush->Color = (TColor)0xEEEEE0;
+			else
+				buffer->Canvas->Brush->Color = (TColor)0x769656;
+
+			if (SelectedX == col && SelectedY == row)
+				buffer->Canvas->Brush->Color = clYellow;
+			else if (PossibleMoves[row][col]) {
+				if (Board[row][col].Type != None)
+					buffer->Canvas->Brush->Color = clRed;
+				else
+					buffer->Canvas->Brush->Color = clLime;
+			}
+
+			buffer->Canvas->FillRect(Rect(x, y, x + cellSize, y + cellSize));
+
+			if (Board[row][col].Type != None) {
+				if (Board[row][col].Color == White)
+					buffer->Canvas->Font->Color = clWhite;
+				else
+					buffer->Canvas->Font->Color = clBlack;
+
+				buffer->Canvas->Font->Size = cellSize * 0.6;
+				buffer->Canvas->Font->Style = TFontStyles() << fsBold;
+				buffer->Canvas->Brush->Style = bsClear;
+
+				wchar_t symbol;
+				switch(Board[row][col].Type) {
+				case King:   symbol = (Board[row][col].Color == White) ? L'♔' : L'♚'; break;
+				case Queen:  symbol = (Board[row][col].Color == White) ? L'♕' : L'♛'; break;
+				case Rook:   symbol = (Board[row][col].Color == White) ? L'♖' : L'♜'; break;
+				case Bishop: symbol = (Board[row][col].Color == White) ? L'♗' : L'♝'; break;
+				case Knight: symbol = (Board[row][col].Color == White) ? L'♘' : L'♞'; break;
+				case Pawn:   symbol = (Board[row][col].Color == White) ? L'♙' : L'♟'; break;
+				default:     symbol = L'?';
+				}
+
+
+
+				int tx = x + (cellSize - buffer->Canvas->TextWidth(symbol)) / 2;
+				int ty = y + (cellSize - buffer->Canvas->TextHeight(symbol)) / 2;
+				buffer->Canvas->TextOut(tx, ty, symbol);
+			}
+		}
+	}
+
+	Image1->Canvas->Draw(0, 0, buffer);
+	delete buffer;
+}
+//---------------------------------------------------------------------------
+
+void TForm1::ClearPossibleMoves()
+{
+	for (int i = 0; i < 8; i++)
+		for (int j = 0; j < 8; j++)
+			PossibleMoves[i][j] = false;
+}
+//---------------------------------------------------------------------------
+
+void TForm1::CalculatePossibleMoves(int row, int col)
+{
+	ClearPossibleMoves();
+	if (Board[row][col].Type == None) return;
+
+	for (int tr = 0; tr < 8; tr++)
+		for (int tc = 0; tc < 8; tc++)
+			if (IsMoveValid(row, col, tr, tc))
+				PossibleMoves[tr][tc] = true;
+}
+//---------------------------------------------------------------------------
+
+void TForm1::ExecuteMove(int fromRow, int fromCol, int toRow, int toCol)
+{
+	Board[toRow][toCol] = Board[fromRow][fromCol];
+
+	Board[fromRow][fromCol] = TPiece(Empty, None);
+
+	if (Board[toRow][toCol].Type == Pawn) {
+		if (Board[toRow][toCol].Color == White && toRow == 0)
+			Board[toRow][toCol].Type = Queen;
+		else if (Board[toRow][toCol].Color == Black && toRow == 7)
+			Board[toRow][toCol].Type = Queen;
+	}
+}
+//---------------------------------------------------------------------------
+
+bool TForm1::IsMoveValid(int fromRow, int fromCol, int toRow, int toCol)
+{
+    TPiece piece = Board[fromRow][fromCol];
+	TPiece target = Board[toRow][toCol];
+
+	if (piece.Type == None) return false;
+	if (target.Color == piece.Color) return false;
+
+	bool moveValid = false;
+	int rowDiff = abs(toRow - fromRow);
+    int colDiff = abs(toCol - fromCol);
+
+	switch(piece.Type) {
+		case Pawn: {
+            int direction = (piece.Color == White) ? -1 : 1;
+			int startRow = (piece.Color == White) ? 6 : 1;
+
+            if (toCol == fromCol && toRow == fromRow + direction && target.Type == None)
+				moveValid = true;
+
+			if (toCol == fromCol && toRow == fromRow + 2*direction &&
+				fromRow == startRow && target.Type == None &&
+                Board[fromRow + direction][fromCol].Type == None)
+				moveValid = true;
+
+            if (abs(toCol - fromCol) == 1 && toRow == fromRow + direction &&
+                target.Color != Empty && target.Color != piece.Color)
+				moveValid = true;
+			break;
+		}
+		case Knight:
+            if ((rowDiff == 2 && colDiff == 1) || (rowDiff == 1 && colDiff == 2))
+				moveValid = true;
+			break;
+        case King:
+            if (rowDiff <= 1 && colDiff <= 1)
+				moveValid = true;
+            break;
+        case Queen:
+			if (fromRow == toRow || fromCol == toCol || rowDiff == colDiff)
+				moveValid = true;
+            break;
+		case Rook:
+            if (fromRow == toRow || fromCol == toCol)
+				moveValid = true;
+			break;
+		case Bishop:
+			if (rowDiff == colDiff)
+				moveValid = true;
+            break;
+        default:
+			moveValid = false;
+			break;
+    }
+
+    if (!moveValid) return false;
+
+	if (piece.Type == Rook || piece.Type == Bishop || piece.Type == Queen) {
+        int rowStep = 0;
+        int colStep = 0;
+
+        if (toRow > fromRow) rowStep = 1;
+        else if (toRow < fromRow) rowStep = -1;
+
+		if (toCol > fromCol) colStep = 1;
+        else if (toCol < fromCol) colStep = -1;
+
+        int r = fromRow + rowStep;
+		int c = fromCol + colStep;
+
+        while (r != toRow || c != toCol) {
+            if (Board[r][c].Type != None) return false;
+			r += rowStep;
+            c += colStep;
+        }
+	}
+
+    TPiece savedFrom = Board[fromRow][fromCol];
+	TPiece savedTo = Board[toRow][toCol];
+
+	Board[toRow][toCol] = Board[fromRow][fromCol];
+	Board[fromRow][fromCol] = TPiece(Empty, None);
+
+    bool kingInCheck = IsCheck(savedFrom.Color);
+
+    Board[fromRow][fromCol] = savedFrom;
+    Board[toRow][toCol] = savedTo;
+
+	if (kingInCheck) return false;
+
+	return true;
+}
+
+bool TForm1::IsSquareUnderAttack(int row, int col, PieceColor attacker)
+{
+	for (int r = 0; r < 8; r++) {
+		for (int c = 0; c < 8; c++) {
+			TPiece piece = Board[r][c];
+
+			if (piece.Color == attacker && piece.Type != None) {
+
+				// Проверяем, может ли эта фигура физически побить клетку (row, col)
+
+				bool canAttack = false;
+				int rowDiff = abs(r - row);
+				int colDiff = abs(c - col);
+
+				switch(piece.Type) {
+					case Pawn: {
+						int direction = (attacker == White) ? -1 : 1;
+						// Пешка бьёт по диагонали вперёд
+						if (abs(c - col) == 1 && r + direction == row){
+							canAttack = true;
+						}
+						break;
+					}
+					case Knight:
+						if ((rowDiff == 2 && colDiff == 1) || (rowDiff == 1 && colDiff == 2))
+							canAttack = true;
+						break;
+					case King:
+						if (rowDiff <= 1 && colDiff <= 1)
+							canAttack = true;
+						break;
+					case Queen:
+						if (r == row || c == col || rowDiff == colDiff)
+							canAttack = true;
+						break;
+					case Rook:
+						if (r == row || c == col)
+							canAttack = true;
+						break;
+					case Bishop:
+						if (rowDiff == colDiff)
+							canAttack = true;
+						break;
+				}
+
+				// Проверяем путь (для ферзя, ладьи, слона)
+				if (canAttack && (piece.Type == Rook || piece.Type == Bishop || piece.Type == Queen)) {
+					int rowStep = 0;
+					int colStep = 0;
+
+					if (r < row) rowStep = 1;
+					else if (r > row) rowStep = -1;
+
+					if (c < col) colStep = 1;
+					else if (c > col) colStep = -1;
+
+                    int tr = r + rowStep;
+					int tc = c + colStep;
+
+					while (tr != row || tc != col) {
+						if (Board[tr][tc].Type != None) {
+                            canAttack = false;
+                            break;
+						}
+                        tr += rowStep;
+                        tc += colStep;
+					}
+				}
+
+				if (canAttack) return true;
+            }
+		}
+	}
+    return false;
+}
+
+bool TForm1::IsCheck(PieceColor kingColor)
+{
+	// Находим короля
+	for (int r = 0; r < 8; r++) {
+		for (int c = 0; c < 8; c++) {
+			if (Board[r][c].Type == King && Board[r][c].Color == kingColor) {
+				// Проверяем, атакован ли король
+				PieceColor attacker = (kingColor == White) ? Black : White;
+				return IsSquareUnderAttack(r, c, attacker);
+			}
+		}
+	}
+	return false;
+}
+bool TForm1::HasLegalMoves(PieceColor player)
+{
+	// Проверяем все фигуры игрока
+	for (int r = 0; r < 8; r++) {
+		for (int c = 0; c < 8; c++) {
+			if (Board[r][c].Color == player && Board[r][c].Type != None) {
+				// Пробуем все возможные клетки для хода
+				for (int tr = 0; tr < 8; tr++) {
+					for (int tc = 0; tc < 8; tc++) {
+						if (IsMoveValid(r, c, tr, tc)) {
+							return true;  // Нашли хотя бы один ход
+						}
+					}
+				}
+			}
+		}
+	}
+	return false;  // Нет ни одного хода
+}
+
+void TForm1::UpdateStatusLabel()
+{
+	 if (IsGameOver) {
+		  Label1->Caption = GameOverMessage;
+		  return;
+	 }
+
+	 if (!GameTimerRunning) {
+		  Label1->Caption = "Нажмите 'Новая игра'";
+		  return;
+	 }
+
+	 if (CheckFlag) {
+		  Label1->Caption = (CurrentPlayer == White) ? "Шах! Ход: Белые" : "Шах! Ход: Чёрные";
+	 }
+	 else {
+		  Label1->Caption = (CurrentPlayer == White) ? "Ход: Белые" : "Ход: Чёрные";
+	 }
+}
+
+
+
+//---------------------------------------------------------------------------
+
+void TForm1::UpdateGameTimerLabel()
+{
+	int minutes = GameSeconds / 60;
+	int seconds = GameSeconds % 60;
+	Label2->Caption = AnsiString().sprintf("Время: %02d:%02d", minutes, seconds);
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::Timer1Timer(TObject *Sender)
+{
+	if (GameTimerRunning && !IsGameOver) {
+		GameSeconds++;
+		UpdateGameTimerLabel();
+	}
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::Image1MouseDown(TObject *Sender, TMouseButton Button,
+TShiftState Shift, int X, int Y)
+{
+    if (IsGameOver) return;
+
+    int cellSize = Image1->Width / 8;
+    int col = X / cellSize;
+    int row = Y / cellSize;
+
+    if (row < 0 || row > 7 || col < 0 || col > 7) return;
+
+    // =========================
+    // 1. ВЫБОР ФИГУРЫ
+    // =========================
+    if (SelectedX == -1)
+    {
+        if (Board[row][col].Color == CurrentPlayer)
+        {
+            SelectedX = col;
+            SelectedY = row;
+            CalculatePossibleMoves(row, col);
+        }
+
+        DrawBoard();
+        return;
+    }
+
+    // =========================
+    // 2. ПОПЫТКА ХОДА
+    // =========================
+    if (PossibleMoves[row][col])
+    {
+        ExecuteMove(SelectedY, SelectedX, row, col);
+
+        SelectedX = -1;
+        SelectedY = -1;
+        ClearPossibleMoves();
+
+        UpdateGameState();
+
+        if (CheckGameOver())
+        {
+            DrawBoard();
+            UpdateStatusLabel();
+			return;
+        }
+
+        CurrentPlayer = (CurrentPlayer == White) ? Black : White;
+    }
+	else
+	{
+        if (Board[row][col].Color == CurrentPlayer)
+        {
+            SelectedX = col;
+            SelectedY = row;
+            CalculatePossibleMoves(row, col);
+        }
+        else
+		{
+            SelectedX = -1;
+            SelectedY = -1;
+            ClearPossibleMoves();
+        }
+    }
+
+    DrawBoard();
+    UpdateStatusLabel();
+}
+//---------------------------------------------------------------------------
+bool TForm1::CheckGameOver()
+{
+	 UpdateGameState();
+
+	 if (IsCheckmate) {
+		  IsGameOver = true;
+		  GameTimerRunning = false;
+		  Timer1->Enabled = false;
+
+		  SelectedX = -1;
+		  SelectedY = -1;
+		  ClearPossibleMoves();
+		  DrawBoard();
+
+		  AnsiString winner = (CurrentPlayer == White) ? "Белые" : "Черные";
+		  GameOverMessage = winner + " победили! Мат!";
+
+		  return true;
+	 }
+
+	 if (IsStalemate) {
+		  IsGameOver = true;
+		  GameTimerRunning = false;
+		  Timer1->Enabled = false;
+
+		  SelectedX = -1;
+		  SelectedY = -1;
+		  ClearPossibleMoves();
+		  DrawBoard();
+
+		  GameOverMessage = "Пат! Ничья!";
+		  return true;
+	 }
+
+	 return false;
+}
+
+void TForm1::UpdateGameState()
+{
+	 PieceColor opponent = (CurrentPlayer == White) ? Black: White;
+
+	 CheckFlag = IsCheck(opponent);
+	 bool hasMoves = HasLegalMoves(opponent);
+
+	 IsCheckmate = CheckFlag && !hasMoves;
+	 IsStalemate = !CheckFlag && !hasMoves;
+}
+
+void __fastcall TForm1::Button1Click(TObject *Sender)
+{
+	SetupBoard();
+	CheckFlag = false;
+	IsCheckmate = false;
+	IsStalemate = false;
+	CurrentPlayer = White;
+	SelectedX = -1;
+	SelectedY = -1;
+	IsGameOver = false;
+	GameSeconds = 0;
+	GameOverMessage = "";
+	ClearPossibleMoves();
+	DrawBoard();
+	UpdateGameTimerLabel();
+
+	GameTimerRunning = true;
+	Timer1->Enabled = true;
+	UpdateGameState();
+	UpdateStatusLabel();
+}
+//---------------------------------------------------------------------------
+
+void __fastcall TForm1::Button2Click(TObject *Sender)
+{
+	Close();
+}
+//---------------------------------------------------------------------------
+
